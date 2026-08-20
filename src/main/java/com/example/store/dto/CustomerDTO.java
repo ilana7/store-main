@@ -8,5 +8,5 @@ import java.util.List;
 public class CustomerDTO {
     private Long id;
     private String name;
-    private List<CustomerOrderDTO> orders;
+    private List<NestedOrderDTO> orders;
 }

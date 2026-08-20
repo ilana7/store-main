@@ -1,0 +1,32 @@
+databaseChangeLog:
+  - changeSet:
+      id: 3-order-customer-id-index
+      author: ilana
+      comment: >-
+        PostgreSQL does not automatically index foreign key columns. Without this,
+        every lookup of a customer's orders is a sequential scan of the order table.
+      changes:
+        - sql:
+            sql: CREATE INDEX idx_order_customer_id ON "order" (customer_id)
+      rollback:
+        - sql:
+            sql: DROP INDEX idx_order_customer_id
+
+  - changeSet:
+      id: 4-reset-identity-sequences
+      author: ilana
+      comment: >-
+        The seed data inserts explicit ids, which does not advance the BIGSERIAL
+        sequences. Without this, the first inserts through the application collide
+        with existing rows and fail on the primary key.
+      changes:
+        - sql:
+            sql: >-
+              SELECT setval(pg_get_serial_sequence('customer', 'id'),
+                            COALESCE((SELECT MAX(id) FROM customer), 0) + 1,
+                            false)
+        - sql:
+            sql: >-
+              SELECT setval(pg_get_serial_sequence('"order"', 'id'),
+                            COALESCE((SELECT MAX(id) FROM "order"), 0) + 1,
+                            false)

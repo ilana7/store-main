@@ -1,7 +1,9 @@
 package com.example.store.mapper;
 
 import com.example.store.dto.CustomerDTO;
+import com.example.store.dto.NestedOrderDTO;
 import com.example.store.entity.Customer;
+import com.example.store.entity.Order;
 
 import org.mapstruct.Mapper;
 
@@ -12,4 +14,6 @@ public interface CustomerMapper {
     CustomerDTO customerToCustomerDTO(Customer customer);
 
     List<CustomerDTO> customersToCustomerDTOs(List<Customer> customer);
+
+    NestedOrderDTO orderToNestedOrderDTO(Order order);
 }

@@ -38,24 +38,86 @@ paths:
       responses:
         '201':
           description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          description: The order references no customer, or contains no products
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          description: The referenced customer or one of the products does not exist
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
       operationId: createOrder
-      description: Create a new order
+      description: >-
+        Create a new order. The customer and products are referenced by id and must already
+        exist; an order must contain at least one product.
       requestBody:
         content:
           application/json:
             schema:
               type: object
+              required:
+                - description
+                - customer
+                - products
               properties:
-                id:
-                  type: integer
-                  format: int64
-                descriptioon:
+                description:
                   type: string
+                customer:
+                  $ref: '#/components/schemas/Reference'
+                products:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/Reference'
+  '/order/{id}':
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      summary: Get Order
+      tags:
+        - store
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: No order exists with that id
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+      operationId: getOrderById
+      description: Get a single order by id
   /customer:
     get:
       summary: Get Customers
       tags:
         - store
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Case-insensitive substring match against the customer name. Omit to return all
+            customers. LIKE wildcards in the value are treated as literal characters.
       responses:
         '200':
           description: OK
@@ -66,7 +128,7 @@ paths:
                 items:
                   $ref: '#/components/schemas/Customer'
       operationId: getCustomers
-      description: Get all customers
+      description: Get all customers, or search them by name
     post:
       summary: Create Customer
       tags:
@@ -74,6 +136,10 @@ paths:
       responses:
         '201':
           description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
       operationId: createCustomer
       description: Create a new customer
       requestBody:
@@ -81,10 +147,9 @@ paths:
           application/json:
             schema:
               type: object
+              required:
+                - name
               properties:
-                id:
-                  type: integer
-                  format: int64
                 name:
                   type: string
   /products:
@@ -98,17 +163,9 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  description:
-                    type: string
-                  orders:
-                    type: array
-                    items:
-                      type: integer
-                      format: int64
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
       operationId: getProducts
       description: Get all products
     post:
@@ -118,6 +175,10 @@ paths:
       responses:
         '201':
           description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
       operationId: createProduct
       description: Create a new product
       requestBody:
@@ -125,16 +186,50 @@ paths:
           application/json:
             schema:
               type: object
+              required:
+                - description
               properties:
-                id:
-                  type: integer
-                  format: int64
                 description:
                   type: string
-                  x-stoplight:
-                    id: jbh0jzkonppv8
+  '/products/{id}':
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      summary: Get Product
+      tags:
+        - store
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '404':
+          description: No product exists with that id
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+      operationId: getProductById
+      description: Get a single product by id
 components:
   schemas:
+    Reference:
+      title: Reference
+      type: object
+      description: A reference to an existing entity by id.
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          format: int64
     Order:
       title: Order
       type: object
@@ -150,8 +245,18 @@ components:
             id:
               type: integer
               format: int64
-            description:
+            name:
               type: string
+        products:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                format: int64
+              description:
+                type: string
     Customer:
       title: Customer
       type: object
@@ -171,8 +276,36 @@ components:
                 format: int64
               description:
                 type: string
-                x-stoplight:
-                  id: mq08x82g95zl9
+    Product:
+      title: Product
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        description:
+          type: string
+        orders:
+          type: array
+          description: Ids of the orders containing this product.
+          items:
+            type: integer
+            format: int64
+    ProblemDetail:
+      title: ProblemDetail
+      type: object
+      description: RFC 7807 problem detail.
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
 tags:
   - name: store
     description: store operations

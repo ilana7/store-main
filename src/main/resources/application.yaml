@@ -1,9 +1,13 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5433/store
-    username: admin
-    password: admin
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/store}
+    username: ${DB_USERNAME:admin}
+    password: ${DB_PASSWORD:admin}
   jpa:
+    # Off deliberately: it holds a database connection open for the whole request and lets
+    # lazy loading happen during serialisation, which is where N+1 queries hide. With it off,
+    # anything the DTOs need must be fetched inside the service transaction (see @EntityGraph).
+    open-in-view: false
     hibernate:
       ddl-auto: validate
     properties:
@@ -13,3 +17,5 @@ spring:
         default_batch_fetch_size: 10
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
+    # Seed data is tagged `dev`; deploy with LIQUIBASE_CONTEXTS=prod to skip it.
+    contexts: ${LIQUIBASE_CONTEXTS:dev}

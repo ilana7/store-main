@@ -1,0 +1,60 @@
+databaseChangeLog:
+  - changeSet:
+      id: 6-product-schema
+      author: ilana
+      comment: >-
+        Products, and the many-to-many join to orders. A product may appear in many orders and
+        an order contains many products. The join table's primary key covers (order_id,
+        product_id); the reverse lookup (which orders contain this product) needs its own index.
+      changes:
+        - sql:
+            sql: >-
+              CREATE TABLE product (
+                  id BIGSERIAL PRIMARY KEY,
+                  description VARCHAR(255) NOT NULL
+              )
+        - sql:
+            sql: >-
+              CREATE TABLE order_product (
+                  order_id BIGINT NOT NULL,
+                  product_id BIGINT NOT NULL,
+                  CONSTRAINT pk_order_product PRIMARY KEY (order_id, product_id),
+                  CONSTRAINT fk_order_product_order
+                      FOREIGN KEY (order_id) REFERENCES "order" (id),
+                  CONSTRAINT fk_order_product_product
+                      FOREIGN KEY (product_id) REFERENCES product (id)
+              )
+        - sql:
+            sql: CREATE INDEX idx_order_product_product_id ON order_product (product_id)
+      rollback:
+        - sql:
+            sql: DROP TABLE order_product
+        - sql:
+            sql: DROP TABLE product
+
+  - changeSet:
+      id: 7-product-seed-data
+      author: ilana
+      context: dev
+      comment: >-
+        Backfills products for the sample data so that every seeded order satisfies the rule
+        that an order contains at least one product. Product descriptions are taken from the
+        distinct order descriptions already present, which are realistic product names.
+        Generated in SQL rather than checked in as another 30,000 INSERT statements.
+      changes:
+        - sql:
+            sql: >-
+              INSERT INTO product (description)
+              SELECT DISTINCT description FROM "order" ORDER BY description
+        - sql:
+            sql: >-
+              INSERT INTO order_product (order_id, product_id)
+              SELECT o.id, 1 + ((o.id * 7 + s) % (SELECT MAX(id) FROM product))
+              FROM "order" o
+              CROSS JOIN generate_series(0, o.id % 3) AS s
+              ON CONFLICT DO NOTHING
+      rollback:
+        - sql:
+            sql: DELETE FROM order_product
+        - sql:
+            sql: DELETE FROM product

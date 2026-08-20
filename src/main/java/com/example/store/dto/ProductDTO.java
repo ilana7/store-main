@@ -5,9 +5,10 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-public class OrderDTO {
+public class ProductDTO {
     private Long id;
     private String description;
-    private NestedCustomerDTO customer;
-    private List<NestedProductDTO> products;
+
+    /** Ids of the orders containing this product. */
+    private List<Long> orders;
 }

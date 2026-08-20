@@ -1,0 +1,18 @@
+databaseChangeLog:
+  - changeSet:
+      id: 5-customer-name-trigram-index
+      author: ilana
+      comment: >-
+        A substring search compiles to LIKE '%x%', which no btree index can serve. pg_trgm
+        provides a GIN index that can. The index is built on LOWER(name) so it matches the
+        expression used by CustomerRepository.searchByName.
+      changes:
+        - sql:
+            sql: CREATE EXTENSION IF NOT EXISTS pg_trgm
+        - sql:
+            sql: >-
+              CREATE INDEX idx_customer_name_trgm
+              ON customer USING gin (LOWER(name) gin_trgm_ops)
+      rollback:
+        - sql:
+            sql: DROP INDEX idx_customer_name_trgm
