@@ -331,8 +331,9 @@ kilobytes rather than the whole jar. The runtime stage is JRE-only, runs as an u
 (uid 10001), and sets `-XX:MaxRAMPercentage=75.0` so the JVM sizes its heap from the container's
 limit rather than the host's. Final image: 477MB, against a 629MB JDK base.
 
-Verified locally: the image builds, runs against PostgreSQL, serves every endpoint correctly, and
-`docker exec ... id -u` confirms it is not running as root.
+Verified both locally and in CI: the image builds, runs against PostgreSQL, serves every endpoint
+correctly, and `docker exec ... id -u` confirms it is not running as root. The pipeline asserts
+the non-root property on every build, so a change that reintroduced root would fail.
 
 ### `.github/workflows/ci.yml`
 
@@ -348,8 +349,28 @@ do not depend on sample rows.
 push, asserts it does not run as root, scans it with Trivy, and publishes to GHCR — never on pull
 requests.
 
-**Not executed.** This project is not a git repository and has no remote, so the workflow is
-validated as well-formed YAML but has never run. It requires a repository and a first push.
+**Verified.** The pipeline has been executed. Both jobs pass against a real PostgreSQL service
+container, and the image is published to GHCR:
+
+```
+ghcr.io/ilana7/store-main:main
+ghcr.io/ilana7/store-main:sha-1b15571
+```
+
+It took two fixes to get there, both of which are in the commit history with their root causes
+explained, and both of which local testing could not have caught:
+
+- `java -jar build/libs/*.jar` matched two artifacts. Gradle's `java` plugin builds a plain jar
+  alongside Spring Boot's executable one, and `-plain.jar` sorts first because `-` precedes `.`,
+  so the JVM was handed the jar with no `Main-Class`. Every local invocation had named the jar
+  explicitly. The `jar` task is now disabled, since nothing consumes the plain artifact.
+- `aquasecurity/trivy-action` was pinned to a version that does not exist. The job failed during
+  setup, before any step ran.
+
+Fixing the first also surfaced two latent weaknesses, now addressed: the startup loop polled a
+dead process for two minutes instead of failing immediately with the application log, and the
+cleanup trap did not wait for the process to exit, leaving a race on port 8080 between the two
+migration steps.
 
 **One deliberate choice:** the Trivy scan is set to `exit-code: 0`, so it reports without failing
 the build. Base images routinely carry unfixed CVEs, and a pipeline that turns red on an upstream
@@ -394,6 +415,12 @@ docker build -t store:local .
 docker run --rm -p 8080:8080 \
   -e DB_URL=jdbc:postgresql://host.docker.internal:5433/store \
   store:local
+```
+
+Or straight from the registry, if you have access to the package:
+
+```shell
+docker pull ghcr.io/ilana7/store-main:main
 ```
 
 Tests (no database required — all 22 are unit or web-slice tests):
