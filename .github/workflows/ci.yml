@@ -82,15 +82,21 @@ jobs:
           DB_PASSWORD: admin
           LIQUIBASE_CONTEXTS: dev
         run: |
-          java -jar build/libs/*.jar &
+          # Exclude the plain jar defensively, in case the `jar` task is ever re-enabled.
+          APP_JAR=$(ls build/libs/*.jar | grep -v -- '-plain\.jar$' | head -1)
+          echo "starting $APP_JAR"
+          java -jar "$APP_JAR" > app-dev.log 2>&1 &
           APP_PID=$!
-          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+          # `wait` so the port is released before the next step starts its own instance.
+          trap 'kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
+            kill -0 $APP_PID 2>/dev/null \
+              || { echo "application exited during startup"; cat app-dev.log; exit 1; }
             curl -sf http://localhost:8080/products/1 >/dev/null && break
             sleep 2
           done
-          curl -sf http://localhost:8080/order/5    >/dev/null || { echo "GET /order/5 failed";    exit 1; }
-          curl -sf http://localhost:8080/products/1 >/dev/null || { echo "GET /products/1 failed"; exit 1; }
+          curl -sf http://localhost:8080/order/5    >/dev/null || { echo "GET /order/5 failed";    cat app-dev.log; exit 1; }
+          curl -sf http://localhost:8080/products/1 >/dev/null || { echo "GET /products/1 failed"; cat app-dev.log; exit 1; }
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/order/999999)" = "404" \
             || { echo "expected 404 for a missing order"; exit 1; }
           echo "migrations applied and endpoints served"
@@ -106,10 +112,13 @@ jobs:
           LIQUIBASE_CONTEXTS: prod
         run: |
           PGPASSWORD=admin createdb -h localhost -p 5433 -U admin store_prod
-          java -jar build/libs/*.jar &
+          APP_JAR=$(ls build/libs/*.jar | grep -v -- '-plain\.jar$' | head -1)
+          java -jar "$APP_JAR" > app-prod.log 2>&1 &
           APP_PID=$!
-          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+          trap 'kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
+            kill -0 $APP_PID 2>/dev/null \
+              || { echo "application exited during startup"; cat app-prod.log; exit 1; }
             curl -sf http://localhost:8080/products >/dev/null && break
             sleep 2
           done

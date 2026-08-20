@@ -16,6 +16,13 @@ java {
     }
 }
 
+// Only the executable boot jar is consumed, by the Dockerfile and by CI. Leaving the plain
+// jar enabled puts a second, non-executable artifact in build/libs that a *.jar glob matches
+// first, because '-' sorts before '.'.
+tasks.named('jar') {
+    enabled = false
+}
+
 repositories {
     mavenCentral()
 }
