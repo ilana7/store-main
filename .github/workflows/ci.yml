@@ -1,0 +1,215 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Superseded runs on the same ref are pointless; cancel them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  verify:
+    name: Build, test and migrate
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16.2
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: admin
+          POSTGRES_DB: store
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U admin -d store"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # A tampered wrapper jar would otherwise execute arbitrary code in CI.
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Separate from `build` so a formatting failure is obvious in the job list
+      # rather than buried in a test run.
+      - name: Check formatting
+        run: ./gradlew spotlessCheck
+
+      - name: Build and test
+        run: ./gradlew build
+
+      - name: Publish test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-coverage-reports
+          path: |
+            build/reports/tests/test
+            build/reports/jacoco/test/html
+          retention-days: 7
+
+      # The unit tests never touch a database, so migrations are unverified until
+      # the application actually boots against one.
+      - name: Verify migrations apply and the app serves traffic
+        env:
+          DB_URL: jdbc:postgresql://localhost:5433/store
+          DB_USERNAME: admin
+          DB_PASSWORD: admin
+          LIQUIBASE_CONTEXTS: dev
+        run: |
+          java -jar build/libs/*.jar &
+          APP_PID=$!
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8080/products/1 >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://localhost:8080/order/5    >/dev/null || { echo "GET /order/5 failed";    exit 1; }
+          curl -sf http://localhost:8080/products/1 >/dev/null || { echo "GET /products/1 failed"; exit 1; }
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/order/999999)" = "404" \
+            || { echo "expected 404 for a missing order"; exit 1; }
+          echo "migrations applied and endpoints served"
+
+      # Production deploys run without the `dev` context, so the schema changesets
+      # must stand alone with no seed data. This catches a schema change that
+      # accidentally depends on sample rows.
+      - name: Verify migrations apply without seed data
+        env:
+          DB_URL: jdbc:postgresql://localhost:5433/store_prod
+          DB_USERNAME: admin
+          DB_PASSWORD: admin
+          LIQUIBASE_CONTEXTS: prod
+        run: |
+          PGPASSWORD=admin createdb -h localhost -p 5433 -U admin store_prod
+          java -jar build/libs/*.jar &
+          APP_PID=$!
+          trap 'kill $APP_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8080/products >/dev/null && break
+            sleep 2
+          done
+          test "$(curl -s http://localhost:8080/products)" = "[]" \
+            || { echo "expected an empty product list with no seed data"; exit 1; }
+          echo "schema migrations apply cleanly without seed data"
+
+  image:
+    name: Build and publish image
+    needs: verify
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    services:
+      postgres:
+        image: postgres:16.2
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: admin
+          POSTGRES_DB: store
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U admin -d store"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=long
+
+      # Built and smoke-tested before any push, so a broken image is never published.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: store:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          docker run -d --name store-app --network host \
+            -e DB_URL=jdbc:postgresql://localhost:5433/store \
+            -e DB_USERNAME=admin -e DB_PASSWORD=admin \
+            store:ci
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8080/products/1 >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://localhost:8080/order/5 >/dev/null || {
+            echo "image failed to serve traffic"; docker logs store-app; exit 1; }
+          test "$(docker exec store-app id -u)" != "0" || { echo "image runs as root"; exit 1; }
+          echo "image serves traffic and runs unprivileged"
+          docker rm -f store-app
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: store:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+          format: table
+
+      - name: Log in to the registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Rebuilt rather than re-tagged, but every layer is a cache hit from the
+      # build above, so this costs seconds.
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
